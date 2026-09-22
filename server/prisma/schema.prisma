@@ -1,0 +1,867 @@
+// Carbon-Connect — Prisma Schema
+// Physical CO₂ marketplace — India-first
+// PostgreSQL 16 | Prisma 5
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────────────────
+// ENUMS
+// ──────────────────────────────────────────────────────────
+
+enum UserStatus {
+  pending
+  active
+  suspended
+  deleted
+}
+
+enum OrgType {
+  buyer
+  seller
+  buyer_seller
+  verifier
+  logistics
+  admin
+}
+
+enum OrgStatus {
+  pending
+  active
+  suspended
+  rejected
+}
+
+enum MemberRole {
+  BUYER_ADMIN
+  BUYER_MEMBER
+  SELLER_ADMIN
+  SELLER_MEMBER
+  VERIFIER
+  LOGISTICS_OPERATOR
+  PLATFORM_ADMIN
+  READ_ONLY_AUDITOR
+}
+
+enum MemberStatus {
+  invited
+  active
+  deactivated
+}
+
+enum FacilityOperatingStatus {
+  operational
+  maintenance
+  decommissioned
+}
+
+enum FacilityDocStatus {
+  not_submitted
+  under_review
+  approved
+  rejected
+}
+
+enum PhysicalState {
+  gas
+  liquid
+  solid
+  gas_liquid
+  other
+}
+
+enum ListingStatus {
+  draft
+  published
+  paused
+  sold_out
+  archived
+}
+
+enum RfqStatus {
+  draft
+  published
+  bids_received
+  shortlisted
+  awarded
+  closed
+  cancelled
+}
+
+enum BidStatus {
+  draft
+  submitted
+  shortlisted
+  awarded
+  declined
+  withdrawn
+  expired
+}
+
+enum AwardStatus {
+  active
+  cancelled
+}
+
+enum ContractStatus {
+  draft
+  pending_signatures
+  partially_signed
+  signed
+  cancelled
+  completed
+}
+
+enum MilestoneType {
+  deposit
+  dispatch
+  delivery
+  acceptance
+  final
+}
+
+enum PaymentStatus {
+  pending
+  initiated
+  paid
+  failed
+  refunded
+}
+
+enum ShipmentStatus {
+  planned
+  dispatched
+  in_transit
+  arrived
+  accepted
+  rejected
+  delivered
+}
+
+enum DocumentStatus {
+  pending
+  under_review
+  verified
+  rejected
+  expired
+}
+
+enum QualityStatus {
+  pending
+  under_review
+  verified
+  rejected
+}
+
+enum BatchStatus {
+  created
+  allocated
+  in_transit
+  delivered
+  accepted
+  rejected
+}
+
+enum DataStatus {
+  measured
+  estimated
+  verified
+}
+
+enum ComplianceFramework {
+  CCTS
+  BEE
+  CERC
+  GCI
+  ACVA
+  CPCB
+  SPCB
+  PESO
+  FSSAI
+  other
+}
+
+enum ComplianceRecordStatus {
+  not_assessed
+  in_review
+  acknowledged
+  verified_for_record
+  expired
+  requires_official_review
+}
+
+enum RequirementType {
+  certificate
+  quality
+  custody
+  delivery
+  compliance
+  other
+}
+
+// ──────────────────────────────────────────────────────────
+// USERS & ORGANIZATIONS
+// ──────────────────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  phone             String?
+  emailVerifiedAt   DateTime?
+  emailVerifyToken  String?
+  emailVerifyExpiry DateTime?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  status            UserStatus @default(pending)
+  lastLoginAt       DateTime?
+  loginAttempts     Int        @default(0)
+  lockedUntil       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  memberships   OrganizationMembership[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  documents     Document[]
+  bidRevisions  BidRevision[]
+  bidMessages   BidMessage[]
+
+  @@map("users")
+}
+
+model Organization {
+  id                String    @id @default(cuid())
+  legalName         String
+  displayName       String
+  organizationType  OrgType
+  gstin             String?
+  cin               String?
+  registeredAddress String
+  state             String
+  city              String
+  country           String    @default("IN")
+  website           String?
+  contactEmail      String
+  contactPhone      String
+  status            OrgStatus @default(pending)
+  demoOnly          Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  memberships          OrganizationMembership[]
+  facilities           Facility[]
+  listings             Listing[]
+  buyerRfqs            Rfq[]           @relation("BuyerOrg")
+  sellerBids           Bid[]           @relation("SellerOrg")
+  buyerAwards          Award[]         @relation("BuyerAward")
+  sellerAwards         Award[]         @relation("SellerAward")
+  buyerContracts       Contract[]      @relation("BuyerContract")
+  sellerContracts      Contract[]      @relation("SellerContract")
+  documents            Document[]
+  mrvRecords           MrvRecord[]
+  complianceRecords    ComplianceContextRecord[]
+  notifications        Notification[]
+  sentMessages         BidMessage[]    @relation("SenderOrg")
+  receivedMessages     BidMessage[]    @relation("RecipientOrg")
+  auditLogs            AuditLog[]
+
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MemberRole
+  status         MemberStatus @default(invited)
+  invitedBy      String?
+  joinedAt       DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@map("organization_memberships")
+}
+
+// ──────────────────────────────────────────────────────────
+// FACILITIES & LISTINGS
+// ──────────────────────────────────────────────────────────
+
+model Facility {
+  id                 String                  @id @default(cuid())
+  organizationId     String
+  name               String
+  facilityType       String
+  address            String
+  state              String
+  city               String
+  latitude           Float?
+  longitude          Float?
+  captureTechnology  String?
+  annualCapacityTonnes Decimal             @db.Decimal(14, 3)
+  operatingStatus    FacilityOperatingStatus @default(operational)
+  documentationStatus FacilityDocStatus     @default(not_submitted)
+  demoOnly           Boolean                @default(false)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  listings     Listing[]
+  shipments    Shipment[]
+  mrvRecords   MrvRecord[]
+
+  @@map("facilities")
+}
+
+model Listing {
+  id                      String        @id @default(cuid())
+  listingCode             String        @unique // e.g. CC-L-4820
+  organizationId          String
+  facilityId              String
+  title                   String
+  grade                   String
+  purityMinimum           Decimal       @db.Decimal(6, 3)
+  physicalState           PhysicalState
+  temperature             String?
+  pressure                String?
+  availableQuantityTonnes Decimal       @db.Decimal(14, 3)
+  minimumOrderTonnes      Decimal       @db.Decimal(14, 3)
+  basePricePaisePerTonne  Int           // stored in paise (INR * 100)
+  availabilityStart       DateTime?
+  availabilityEnd         DateTime?
+  deliveryRadiusKm        Int?
+  deliveryTerms           String?
+  status                  ListingStatus @default(draft)
+  demoOnly                Boolean       @default(false)
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  facility         Facility          @relation(fields: [facilityId], references: [id])
+  listingDocuments ListingDocument[]
+  bids             Bid[]
+  qualityRecords   QualityRecord[]
+  batches          Batch[]
+
+  @@map("listings")
+}
+
+model ListingDocument {
+  id           String   @id @default(cuid())
+  listingId    String
+  documentId   String
+  documentType String
+  isRequired   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  listing  Listing  @relation(fields: [listingId], references: [id])
+  document Document @relation(fields: [documentId], references: [id])
+
+  @@map("listing_documents")
+}
+
+// ──────────────────────────────────────────────────────────
+// RFQs — BUYER PROCUREMENT REQUIREMENTS
+// ──────────────────────────────────────────────────────────
+
+model Rfq {
+  id                    String    @id @default(cuid())
+  rfqCode               String    @unique // e.g. CC-RFQ-2041
+  buyerOrganizationId   String
+  title                 String
+  description           String?
+  gradeRequired         String
+  minimumPurity         Decimal   @db.Decimal(6, 3)
+  physicalState         PhysicalState
+  quantityTonnes        Decimal   @db.Decimal(14, 3)
+  quantityUnit          String    @default("tonnes")
+  deliveryStart         DateTime?
+  deliveryEnd           DateTime?
+  deliveryAddress       String
+  deliveryState         String
+  deliveryCity          String
+  budgetMinPaisePerTonne Int?     // stored in paise
+  budgetMaxPaisePerTonne Int?
+  preferredDeliveryMode String?
+  utilizationType       String[]
+  sourcePreference      String?
+  deadline              DateTime?
+  status                RfqStatus @default(draft)
+  publishedAt           DateTime?
+  closedAt              DateTime?
+  awardedBidId          String?   @unique
+  createdBy             String
+  demoOnly              Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  buyerOrganization Organization    @relation("BuyerOrg", fields: [buyerOrganizationId], references: [id])
+  requirements      RfqRequirement[]
+  bids              Bid[]
+  award             Award?
+  messages          BidMessage[]
+
+  @@map("rfqs")
+}
+
+model RfqRequirement {
+  id              String          @id @default(cuid())
+  rfqId           String
+  requirementType RequirementType
+  label           String
+  isRequired      Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+
+  rfq Rfq @relation(fields: [rfqId], references: [id])
+
+  @@map("rfq_requirements")
+}
+
+// ──────────────────────────────────────────────────────────
+// BIDS
+// ──────────────────────────────────────────────────────────
+
+model Bid {
+  id                        String    @id @default(cuid())
+  bidCode                   String    @unique // e.g. CC-BID-7012
+  rfqId                     String
+  sellerOrganizationId      String
+  listingId                 String
+  quantityTonnes            Decimal   @db.Decimal(14, 3)
+  exWorksPricePaisePerTonne Int       // stored in paise
+  logisticsPricePaisePerTonne Int
+  deliveredPricePaisePerTonne Int     // server-calculated: exWorks + logistics
+  platformFeePaisePerTonne  Int       @default(0)
+  totalEstimatedValuePaise  BigInt    // server-calculated
+  leadTimeBusinessDays      Int
+  validUntil                DateTime?
+  sellerNote                String?
+  evidenceSummary           String?
+  status                    BidStatus @default(draft)
+  submittedAt               DateTime?
+  withdrawnAt               DateTime?
+  idempotencyKey            String?   @unique
+  demoOnly                  Boolean   @default(false)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  rfq              Rfq           @relation(fields: [rfqId], references: [id])
+  sellerOrganization Organization  @relation("SellerOrg", fields: [sellerOrganizationId], references: [id])
+  listing          Listing       @relation(fields: [listingId], references: [id])
+  revisions        BidRevision[]
+  messages         BidMessage[]
+  award            Award?
+
+  @@map("bids")
+}
+
+model BidRevision {
+  id             String   @id @default(cuid())
+  bidId          String
+  revisionNumber Int
+  payloadJson    Json
+  createdBy      String
+  createdAt      DateTime @default(now())
+
+  bid       Bid  @relation(fields: [bidId], references: [id])
+  createdByUser User @relation(fields: [createdBy], references: [id])
+
+  @@map("bid_revisions")
+}
+
+model BidMessage {
+  id                    String    @id @default(cuid())
+  rfqId                 String
+  bidId                 String?
+  senderOrganizationId  String
+  recipientOrganizationId String
+  senderId              String
+  message               String
+  createdAt             DateTime  @default(now())
+  readAt                DateTime?
+
+  rfq               Rfq          @relation(fields: [rfqId], references: [id])
+  bid               Bid?         @relation(fields: [bidId], references: [id])
+  senderOrg         Organization @relation("SenderOrg", fields: [senderOrganizationId], references: [id])
+  recipientOrg      Organization @relation("RecipientOrg", fields: [recipientOrganizationId], references: [id])
+  sender            User         @relation(fields: [senderId], references: [id])
+
+  @@map("bid_messages")
+}
+
+// ──────────────────────────────────────────────────────────
+// AWARDS & CONTRACTS
+// ──────────────────────────────────────────────────────────
+
+model Award {
+  id                  String      @id @default(cuid())
+  rfqId               String      @unique
+  bidId               String      @unique
+  buyerOrganizationId String
+  sellerOrganizationId String
+  awardedAt           DateTime    @default(now())
+  awardedBy           String
+  awardNote           String?
+  status              AwardStatus @default(active)
+  idempotencyKey      String?     @unique
+  demoOnly            Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  rfq              Rfq          @relation(fields: [rfqId], references: [id])
+  bid              Bid          @relation(fields: [bidId], references: [id])
+  buyerOrg         Organization @relation("BuyerAward", fields: [buyerOrganizationId], references: [id])
+  sellerOrg        Organization @relation("SellerAward", fields: [sellerOrganizationId], references: [id])
+  contract         Contract?
+
+  @@map("awards")
+}
+
+model Contract {
+  id                   String         @id @default(cuid())
+  contractCode         String         @unique // e.g. CC-CON-1234
+  rfqId                String
+  bidId                String
+  awardId              String         @unique
+  buyerOrganizationId  String
+  sellerOrganizationId String
+  status               ContractStatus @default(draft)
+  termsJson            Json
+  buyerSignedAt        DateTime?
+  sellerSignedAt       DateTime?
+  signedDocumentId     String?
+  demoOnly             Boolean        @default(false)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  award              Award              @relation(fields: [awardId], references: [id])
+  buyerOrg           Organization       @relation("BuyerContract", fields: [buyerOrganizationId], references: [id])
+  sellerOrg          Organization       @relation("SellerContract", fields: [sellerOrganizationId], references: [id])
+  paymentMilestones  PaymentMilestone[]
+  shipments          Shipment[]
+
+  @@map("contracts")
+}
+
+// ──────────────────────────────────────────────────────────
+// PAYMENTS
+// ──────────────────────────────────────────────────────────
+
+model PaymentMilestone {
+  id                String        @id @default(cuid())
+  contractId        String
+  milestoneType     MilestoneType
+  amountPaise       BigInt        // stored in paise
+  dueAt             DateTime?
+  status            PaymentStatus @default(pending)
+  providerReference String?
+  idempotencyKey    String?       @unique
+  paidAt            DateTime?
+  demoOnly          Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id])
+
+  @@map("payment_milestones")
+}
+
+// ──────────────────────────────────────────────────────────
+// LOGISTICS
+// ──────────────────────────────────────────────────────────
+
+model Shipment {
+  id                         String         @id @default(cuid())
+  shipmentCode               String         @unique // e.g. CC-SHP-5001
+  contractId                 String
+  originFacilityId           String
+  destinationAddress         String
+  destinationCity            String
+  destinationState           String
+  carrierName                String?
+  vehicleOrContainerReference String?
+  deliveryMode               String?
+  status                     ShipmentStatus @default(planned)
+  plannedDispatchAt          DateTime?
+  estimatedArrivalAt         DateTime?
+  actualArrivalAt            DateTime?
+  demoOnly                   Boolean        @default(false)
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+
+  contract       Contract        @relation(fields: [contractId], references: [id])
+  originFacility Facility        @relation(fields: [originFacilityId], references: [id])
+  events         ShipmentEvent[]
+  qualityRecords QualityRecord[]
+  batches        Batch[]
+  passport       DigitalPassport?
+  mrvRecords     MrvRecord[]
+
+  @@map("shipments")
+}
+
+model ShipmentEvent {
+  id         String   @id @default(cuid())
+  shipmentId String
+  eventType  String
+  eventTime  DateTime
+  location   String?
+  notes      String?
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@map("shipment_events")
+}
+
+// ──────────────────────────────────────────────────────────
+// DOCUMENTS
+// ──────────────────────────────────────────────────────────
+
+model Document {
+  id                String         @id @default(cuid())
+  organizationId    String
+  uploadedBy        String
+  fileName          String         // sanitized server-side, never raw client name
+  storageKey        String         // S3 object key — never exposed directly
+  mimeType          String
+  sizeBytes         Int
+  sha256            String
+  documentType      String
+  status            DocumentStatus @default(pending)
+  expiresAt         DateTime?
+  verifiedBy        String?
+  verifiedAt        DateTime?
+  verificationNotes String?
+  demoOnly          Boolean        @default(false)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  uploader         User              @relation(fields: [uploadedBy], references: [id])
+  listingDocuments ListingDocument[]
+
+  @@map("documents")
+}
+
+// ──────────────────────────────────────────────────────────
+// QUALITY
+// ──────────────────────────────────────────────────────────
+
+model QualityRecord {
+  id               String        @id @default(cuid())
+  shipmentId       String?
+  listingId        String?
+  batchId          String?
+  analysisDate     DateTime
+  laboratoryName   String
+  purity           Decimal       @db.Decimal(6, 3)
+  physicalState    PhysicalState
+  contaminantsJson Json
+  standardReference String?
+  status           QualityStatus @default(pending)
+  verifiedBy       String?
+  verifiedAt       DateTime?
+  notes            String?
+  demoOnly         Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  shipment Shipment? @relation(fields: [shipmentId], references: [id])
+  listing  Listing?  @relation(fields: [listingId], references: [id])
+  batch    Batch?    @relation(fields: [batchId], references: [id])
+
+  @@map("quality_records")
+}
+
+model Batch {
+  id             String      @id @default(cuid())
+  batchCode      String      @unique // e.g. CC-BAT-2409
+  listingId      String
+  shipmentId     String?
+  quantityTonnes Decimal     @db.Decimal(14, 3)
+  productionDate DateTime
+  captureSource  String
+  status         BatchStatus @default(created)
+  demoOnly       Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  listing        Listing         @relation(fields: [listingId], references: [id])
+  shipment       Shipment?       @relation(fields: [shipmentId], references: [id])
+  qualityRecords QualityRecord[]
+  passport       DigitalPassport?
+
+  @@map("batches")
+}
+
+// ──────────────────────────────────────────────────────────
+// DIGITAL PASSPORT
+// IMPORTANT: Records physical batch identity and chain of custody ONLY.
+// Does NOT claim permanent storage, carbon-credit issuance,
+// government approval, or CCTS compliance.
+// ──────────────────────────────────────────────────────────
+
+model DigitalPassport {
+  id                      String    @id @default(cuid())
+  passportCode            String    @unique // e.g. CC-PAS-8801
+  batchId                 String    @unique
+  shipmentId              String    @unique
+  puritySnapshot          Decimal   @db.Decimal(6, 3)
+  contaminantsSnapshotJson Json
+  custodyEventsJson       Json
+  documentsSnapshotJson   Json
+  utilizationType         String
+  physicalCo2Disclaimer   String    @default("This passport records the physical identity and chain of custody of a physical CO₂ batch. It does not constitute a carbon credit, carbon offset, CCTS certificate, proof of permanent storage, or government registration.")
+  acceptanceStatus        String?
+  issuedAt                DateTime  @default(now())
+  issuedBy                String
+  revokedAt               DateTime?
+  revocationReason        String?
+  demoOnly                Boolean   @default(false)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  batch    Batch    @relation(fields: [batchId], references: [id])
+  shipment Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@map("digital_passports")
+}
+
+// ──────────────────────────────────────────────────────────
+// MRV
+// ──────────────────────────────────────────────────────────
+
+model MrvRecord {
+  id               String     @id @default(cuid())
+  organizationId   String
+  facilityId       String?
+  contractId       String?
+  shipmentId       String?
+  activityType     String
+  measurementType  String
+  value            Decimal    @db.Decimal(18, 6)
+  unit             String
+  methodology      String?
+  dataStatus       DataStatus @default(measured)
+  sourceDocumentId String?
+  reviewNotes      String?
+  demoOnly         Boolean    @default(false)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  facility     Facility?    @relation(fields: [facilityId], references: [id])
+  shipment     Shipment?    @relation(fields: [shipmentId], references: [id])
+
+  @@map("mrv_records")
+}
+
+// ──────────────────────────────────────────────────────────
+// COMPLIANCE CONTEXT
+// IMPORTANT: Status is informational only.
+// Never automatically set to "compliant" — requires authorized workflow.
+// ──────────────────────────────────────────────────────────
+
+model ComplianceContextRecord {
+  id              String                 @id @default(cuid())
+  organizationId  String
+  framework       ComplianceFramework
+  recordType      String
+  status          ComplianceRecordStatus @default(not_assessed)
+  referenceNumber String?
+  documentId      String?
+  effectiveFrom   DateTime?
+  effectiveUntil  DateTime?
+  notes           String?
+  demoOnly        Boolean                @default(false)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("compliance_context_records")
+}
+
+// ──────────────────────────────────────────────────────────
+// SOURCE REGISTRY (CCTS & Regulatory References)
+// Admin-managed. Read-only for all other roles.
+// ──────────────────────────────────────────────────────────
+
+model SourceRegistry {
+  id            String   @id @default(cuid())
+  title         String
+  publisher     String
+  url           String
+  sourceType    String   // official_government | regulatory | independent | educational
+  lastReviewedAt DateTime?
+  effectiveDate DateTime?
+  notes         String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("source_registry")
+}
+
+// ──────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ──────────────────────────────────────────────────────────
+
+model Notification {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  type           String
+  title          String
+  body           String
+  link           String?
+  readAt         DateTime?
+  demoOnly       Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// ──────────────────────────────────────────────────────────
+// AUDIT LOG — Append-only, never update or delete
+// ──────────────────────────────────────────────────────────
+
+model AuditLog {
+  id                   String   @id @default(cuid())
+  actorUserId          String?
+  actorOrganizationId  String?
+  action               String   // e.g. RFQ_PUBLISHED, BID_AWARDED
+  entityType           String   // e.g. Rfq, Bid, Contract
+  entityId             String
+  beforeJson           Json?
+  afterJson            Json?
+  ipAddress            String?
+  userAgent            String?
+  createdAt            DateTime @default(now())
+
+  actorUser         User?         @relation(fields: [actorUserId], references: [id])
+  actorOrganization Organization? @relation(fields: [actorOrganizationId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
